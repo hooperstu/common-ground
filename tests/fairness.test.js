@@ -32,3 +32,28 @@ const g = F.coarseGrid([{ lat: 50.1, lng: -5.5 }, { lat: 58.6, lng: -3.0 }, { la
 assert.ok(g.points.length <= 260 && g.points.length > 50, `grid size ${g.points.length}`);
 assert.strictEqual(F.formatDuration(3660), '1 h 1 min');
 console.log('fairness tests passed');
+
+// Lift sharing.
+{
+  const ppl = [{ id: 1, ride: null, carMode: 'home' }, { id: 2, ride: 1 }, { id: 3, ride: null }];
+  const cars = F.buildCars(ppl);
+  assert.strictEqual(cars.length, 1);
+  assert.strictEqual(cars[0].driver.id, 1);
+  const t = (o, k) => ({ 1: 100, 2: 50, 3: 70, 'x:k': 30 })[o];
+  const pp = (a, b) => (a === 1 && b === 2 ? 20 : 999);
+  let j = F.journeys(ppl, cars, { t, d: t, pp, ppd: pp, pickups: new Map() });
+  assert.strictEqual(j.get(1).t('k'), 70, 'driver: home -> passenger (20) -> venue (50)');
+  assert.strictEqual(j.get(2).t('k'), 50, 'passenger rides from home');
+  assert.strictEqual(j.get(3).t('k'), 70, 'solo unchanged');
+  ppl[0].carMode = 'meet';
+  const meetCars = F.buildCars(ppl);
+  const tm = (o, k) => (k === 'P' ? { 1: 10, 2: 15 }[o] : t(o, k));
+  j = F.journeys(ppl, meetCars, { t: tm, d: tm, pp, ppd: pp, pickups: new Map([[1, { key: 'P', originId: 'x:k' }]]) });
+  assert.strictEqual(j.get(1).t('k'), 40);
+  assert.strictEqual(j.get(2).t('k'), 45);
+  const pick = F.choosePickup([{ id: 1 }, { id: 2 }], [{ key: 'A' }, { key: 'B' }], (o, k) => (k === 'A' ? (o === 1 ? 5 : 50) : 20));
+  assert.strictEqual(pick.key, 'B', 'pickup keeps the longest leg short');
+  // A passenger cannot also be a driver.
+  assert.strictEqual(F.buildCars([{ id: 1, ride: 2 }, { id: 2, ride: 3 }, { id: 3, ride: null }]).length, 1);
+}
+console.log('lift share tests passed');

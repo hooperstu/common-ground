@@ -160,7 +160,95 @@
     return mi < 10 ? `${mi.toFixed(1)} mi` : `${Math.round(mi)} mi`;
   }
 
+
+  // ---------- Lift sharing ----------
+  // people: [{id, ride (driver id or null), carMode ('home'|'meet')}]. Returns cars with at least one passenger.
+  function buildCars(people) {
+    const byId = new Map(people.map((p) => [p.id, p]));
+    const cars = new Map();
+    for (const p of people) {
+      const d = p.ride != null ? byId.get(p.ride) : null;
+      if (!d || d === p || d.ride != null) continue;
+      if (!cars.has(d.id)) cars.set(d.id, { driver: d, passengers: [], mode: d.carMode === 'meet' ? 'meet' : 'home' });
+      cars.get(d.id).passengers.push(p);
+    }
+    return [...cars.values()];
+  }
+
+  // Home pickup order: driver collects the nearest passenger next. pp(a, b) = seconds from a's home to b's home.
+  function pickupOrder(car, pp) {
+    const left = car.passengers.slice();
+    const order = [car.driver];
+    while (left.length) {
+      const from = order[order.length - 1];
+      let bi = 0, bt = Infinity;
+      left.forEach((q, i) => { const t = pp(from.id, q.id); if (t != null && t < bt) { bt = t; bi = i; } });
+      order.push(left.splice(bi, 1)[0]);
+    }
+    return order;
+  }
+
+  // Rough drive time between two points from straight-line distance (for choosing meet points only).
+  function roughSeconds(a, b) {
+    const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
+    return (2 * 6371 * Math.asin(Math.sqrt(x)) * 1.25 / 75) * 3600;
+  }
+
+  // Meet point for a car: keeps the longest drive to it short and sits on the way to the venue.
+  // t(originId, key) = seconds; toward (optional) = {lat, lng} of the likely venue.
+  function choosePickup(members, candidates, t, toward) {
+    let best = null, bestScore = Infinity;
+    for (const c of candidates) {
+      let max = 0, sum = 0, ok = true;
+      for (const m of members) {
+        const v = t(m.id, c.key);
+        if (v == null) { ok = false; break; }
+        if (v > max) max = v;
+        sum += v;
+      }
+      if (!ok) continue;
+      const sc = max + 0.1 * sum + (toward ? roughSeconds(c, toward) : 0);
+      if (sc < bestScore) { bestScore = sc; best = c; }
+    }
+    return best;
+  }
+
+  // Build per-person journey lookups. Returns {time(pid, key), dist(pid, key), plan: Map pid -> description}.
+  // opts: t(originId, key), d(originId, key), pp(a, b), ppd(a, b), pickups: Map driverId -> {key, originId}.
+  function journeys(people, cars, opts) {
+    const fn = new Map();
+    const sum = (a, b) => (a == null || b == null ? null : a + b);
+    for (const p of people) {
+      fn.set(p.id, { t: (k) => opts.t(p.id, k), d: (k) => opts.d(p.id, k), car: null });
+    }
+    for (const car of cars) {
+      if (car.mode === 'home') {
+        const order = pickupOrder(car, opts.pp);
+        const last = order[order.length - 1];
+        for (let i = 0; i < order.length; i++) {
+          let tt = 0, dd = 0;
+          for (let j = i; j < order.length - 1; j++) {
+            tt = sum(tt, opts.pp(order[j].id, order[j + 1].id));
+            dd = sum(dd, opts.ppd(order[j].id, order[j + 1].id));
+          }
+          const tt0 = tt, dd0 = dd;
+          fn.set(order[i].id, { t: (k) => sum(tt0, opts.t(last.id, k)), d: (k) => sum(dd0, opts.d(last.id, k)), car, order });
+        }
+      } else {
+        const pk = opts.pickups.get(car.driver.id);
+        for (const m of [car.driver, ...car.passengers]) {
+          if (!pk) { fn.set(m.id, { t: () => null, d: () => null, car }); continue; }
+          const tm = opts.t(m.id, pk.key), dm = opts.d(m.id, pk.key);
+          fn.set(m.id, { t: (k) => sum(tm, opts.t(pk.originId, k)), d: (k) => sum(dm, opts.d(pk.originId, k)), car, pickup: pk });
+        }
+      }
+    }
+    return fn;
+  }
+
   const api = {
+    buildCars, pickupOrder, choosePickup, journeys, roughSeconds,
     weightMultiplier, weightLabel, coarseGrid, fineGrid, scoreCandidates, fairZone,
     formatDuration, formatMiles, bbox, kmPerDegLng, KM_PER_DEG_LAT,
   };

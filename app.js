@@ -13,7 +13,7 @@
 
   // ---------- State ----------
   const state = {
-    people: [], // {id, name, label, lat, lng, w, color}
+    people: [], // {id, name, label, lat, lng, w, color, ride (driver id|null), carMode ('home'|'meet')}
     alpha: 0.75,
     candidates: new Map(), // key -> {key, lat, lng, spacing, fine, snapped:[lat,lng]|null, valid:bool|undefined}
     times: new Map(), // `${pid}|${key}` -> seconds|null
@@ -24,6 +24,10 @@
     zone: null,
     routes: new Map(), // `${pid}@${lat},${lng}>${key}` -> {coords, duration, distance, summary}
     places: new Map(),
+    pp: new Map(), // `${a}>${b}` -> {t, d} home-to-home drive
+    cars: [],
+    pickups: new Map(), // driverId -> {key, originId, lat, lng}
+    journeys: null,
     syncGen: 0,
   };
   let nextId = 1;
@@ -94,6 +98,7 @@
     routes: L.layerGroup().addTo(map),
     people: L.layerGroup().addTo(map),
     meet: L.layerGroup().addTo(map),
+    pickups: L.layerGroup().addTo(map),
   };
   const markers = new Map();
   const routeLines = new Map();
@@ -159,12 +164,21 @@
           <div class="weight">
             <input type="range" min="-100" max="100" step="1" aria-label="Travel less or more">
             <span class="weight-label"></span>
+          </div>
+          <div class="lift">
+            <select class="ride" aria-label="Car"></select>
+            <select class="mode" aria-label="Pickup" hidden>
+              <option value="home">Home pickup</option>
+              <option value="meet">Meet point</option>
+            </select>
           </div>`;
         const range = li.querySelector('input[type=range]');
         range.addEventListener('input', () => setWeight(p.id, Number(range.value)));
         range.addEventListener('change', () => { save(); scheduleRefine(); });
         range.addEventListener('dblclick', () => { range.value = 0; setWeight(p.id, 0); save(); scheduleRefine(); });
         li.querySelector('.icon-btn').addEventListener('click', () => removePerson(p.id));
+        li.querySelector('.ride').addEventListener('change', (e) => setRide(p.id, e.target.value === '' ? null : Number(e.target.value)));
+        li.querySelector('.mode').addEventListener('change', (e) => setMode(p.id, e.target.value));
         const nameEl = li.querySelector('.person-name');
         const startRename = () => renamePerson(p.id, nameEl);
         nameEl.addEventListener('click', startRename);
@@ -177,8 +191,51 @@
       const range = li.querySelector('input[type=range]');
       if (document.activeElement !== range) range.value = p.w;
       updateWeightLabel(li, p.w);
+      renderLift(li, p);
       if (ol.children[idx] !== li) ol.insertBefore(li, ol.children[idx] || null);
     });
+  }
+
+  function renderLift(li, p) {
+    const sel = li.querySelector('.ride');
+    const hasPassengers = state.people.some((q) => q.ride === p.id);
+    const drivers = state.people.filter((q) => q.id !== p.id && q.ride == null);
+    const opts = hasPassengers
+      ? [['', 'Driving']]
+      : [['', 'Own car'], ...drivers.map((q) => [String(q.id), `With ${q.name}`])];
+    const sig = JSON.stringify(opts);
+    if (sel.dataset.sig !== sig) {
+      sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join('');
+      sel.dataset.sig = sig;
+    }
+    sel.value = p.ride == null ? '' : String(p.ride);
+    sel.disabled = hasPassengers;
+    sel.classList.toggle('on', p.ride != null || hasPassengers);
+    const mode = li.querySelector('.mode');
+    mode.hidden = !hasPassengers;
+    mode.value = p.carMode === 'meet' ? 'meet' : 'home';
+  }
+
+  function setRide(id, driverId) {
+    const p = state.people.find((x) => x.id === id);
+    if (!p) return;
+    const d = state.people.find((x) => x.id === driverId);
+    p.ride = d && d.ride == null && d.id !== id ? d.id : null;
+    ridesChanged();
+  }
+
+  function setMode(id, mode) {
+    const p = state.people.find((x) => x.id === id);
+    if (!p) return;
+    p.carMode = mode === 'meet' ? 'meet' : 'home';
+    ridesChanged();
+  }
+
+  function ridesChanged() {
+    renderPeople();
+    save();
+    recompute();
+    scheduleSync();
   }
 
   function updateWeightLabel(li, w) {
@@ -197,16 +254,16 @@
     const done = () => {
       p.name = input.value.trim() || p.name;
       nameEl.textContent = p.name;
-      drawPeople(); renderSummary(); save();
+      drawPeople(); renderPeople(); renderSummary(); save();
     };
     input.addEventListener('blur', done, { once: true });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.value = p.name; input.blur(); } });
   }
 
   // ---------- People changes ----------
-  function addPerson({ name, label, lat, lng, w = 0 }) {
+  function addPerson({ name, label, lat, lng, w = 0, ride = null, carMode = 'home' }) {
     if (state.people.length >= CFG.maxPeople) { flash(`Max ${CFG.maxPeople}.`, 'error'); return false; }
-    const p = { id: nextId++, name: (name || '').trim() || `Person ${state.people.length + 1}`, label, lat, lng, w, color: nextColour() };
+    const p = { id: nextId++, name: (name || '').trim() || `Person ${state.people.length + 1}`, label, lat, lng, w, ride, carMode, color: nextColour() };
     state.people.push(p);
     peopleChanged(true);
     return true;
@@ -214,6 +271,7 @@
 
   function removePerson(id) {
     state.people = state.people.filter((p) => p.id !== id);
+    for (const q of state.people) if (q.ride === id) q.ride = null;
     forgetPerson(id);
     peopleChanged(true);
   }
@@ -228,6 +286,7 @@
 
   function forgetPerson(id) {
     for (const k of [...state.times.keys()]) if (k.startsWith(`${id}|`)) { state.times.delete(k); state.dists.delete(k); }
+    for (const k of [...state.pp.keys()]) { const [a, b] = k.split('>'); if (+a === id || +b === id) state.pp.delete(k); }
   }
 
   function setWeight(id, w) {
@@ -255,6 +314,11 @@
 
   // ---------- Drive-time matrix ----------
   const tkey = (pid, ckey) => `${pid}|${ckey}`;
+
+  // Origins are people plus any lift-share meet points.
+  function origins() {
+    return [...state.people, ...[...state.pickups.values()].map((pk) => ({ id: pk.originId, lat: pk.lat, lng: pk.lng }))];
+  }
 
   async function fetchMatrix(people, cands, gen) {
     if (!people.length || !cands.length) return;
@@ -286,10 +350,26 @@
 
   // Work out which (person, candidate) drive times are missing and fetch them in as few calls as possible.
   async function fillMissing(cands, gen) {
-    const missingCands = cands.filter((c) => c.valid !== false && state.people.some((p) => !state.times.has(tkey(p.id, c.key))));
+    const os = origins();
+    const missingCands = cands.filter((c) => c.valid !== false && os.some((p) => !state.times.has(tkey(p.id, c.key))));
     if (!missingCands.length) return;
-    const needPeople = state.people.filter((p) => missingCands.some((c) => !state.times.has(tkey(p.id, c.key))));
+    const needPeople = os.filter((p) => missingCands.some((c) => !state.times.has(tkey(p.id, c.key))));
     await fetchMatrix(needPeople, missingCands, gen);
+  }
+
+  // Home-to-home drive times, needed for lift-share home pickups.
+  async function fillPeopleTable(gen) {
+    const need = state.cars.some((c) => c.mode === 'home') &&
+      state.people.some((a) => state.people.some((b) => a !== b && !state.pp.has(`${a.id}>${b.id}`)));
+    if (!need || gen !== state.syncGen) return;
+    const ppl = state.people.slice();
+    const coords = ppl.map((p) => `${p.lng.toFixed(5)},${p.lat.toFixed(5)}`).join(';');
+    const data = await osrmQ(() => fetchJson(`${CFG.osrmUrl}/table/v1/driving/${coords}?annotations=duration,distance`));
+    if (!data || data.code !== 'Ok') throw new Error('Routing service error');
+    ppl.forEach((a, i) => ppl.forEach((b, j) => {
+      if (i !== j) state.pp.set(`${a.id}>${b.id}`, { t: data.durations[i][j], d: data.distances ? data.distances[i][j] : null });
+    }));
+    recompute();
   }
 
   const scheduleSync = debounce(sync, 500);
@@ -299,7 +379,7 @@
     const grid = F.coarseGrid(state.people);
     if (grid.spacing !== state.coarseSpacing) {
       // The area changed a lot: start a fresh grid.
-      state.candidates.clear(); state.times.clear(); state.dists.clear(); state.fineGroups = [];
+      state.candidates.clear(); state.times.clear(); state.dists.clear(); state.fineGroups = []; state.pickups.clear();
       state.coarseSpacing = grid.spacing;
     }
     // Keep fine points and coarse points still inside the area; add any new coarse points.
@@ -309,6 +389,11 @@
     try {
       setStatus('Calculating…', 'working');
       await fillMissing([...state.candidates.values()], gen);
+      if (gen !== state.syncGen) return;
+      await fillPeopleTable(gen);
+      if (gen !== state.syncGen) return;
+      recompute();
+      await fillMissing([...state.candidates.values()], gen); // rows for any new meet points
       if (gen !== state.syncGen) return;
       await refine(gen);
       if (gen !== state.syncGen) return;
@@ -350,7 +435,33 @@
   function recompute() {
     if (state.people.length < 2) { clearResult(); return; }
     const cands = [...state.candidates.values()].filter((c) => c.valid);
-    const scored = F.scoreCandidates(state.people, cands, (pid, key) => state.times.get(tkey(pid, key)), state.alpha);
+    const t = (o, k) => state.times.get(tkey(o, k));
+    const d = (o, k) => state.dists.get(tkey(o, k));
+    state.cars = F.buildCars(state.people);
+    // Choose a meet point for each meet-mode car (depends only on where the car's members live).
+    const newPickups = new Map();
+    let needRows = false;
+    const gridReady = ![...state.candidates.values()].some((c) => c.valid === undefined);
+    // Likely venue ignoring cars and weights, so meet points sit on the way there and stay put while sliders move.
+    const anchorHit = state.cars.some((c) => c.mode === 'meet') && F.scoreCandidates(state.people.map((p) => ({ id: p.id, w: 0 })), cands, t, 0.75)[0];
+    const anchor = anchorHit ? anchorHit.cand : null;
+    for (const car of state.cars) {
+      if (car.mode !== 'meet') continue;
+      if (!gridReady) { const old = state.pickups.get(car.driver.id); if (old) newPickups.set(car.driver.id, old); continue; }
+      const pc = F.choosePickup([car.driver, ...car.passengers], cands, t, anchor);
+      if (!pc) continue;
+      const ll = pc.snapped || [pc.lat, pc.lng];
+      const pk = { key: pc.key, originId: `x:${pc.key}`, lat: ll[0], lng: ll[1] };
+      newPickups.set(car.driver.id, pk);
+      if (cands.some((c) => !state.times.has(tkey(pk.originId, c.key)))) needRows = true;
+    }
+    const pickupsChanged = JSON.stringify([...newPickups]) !== JSON.stringify([...state.pickups]);
+    state.pickups = newPickups;
+    if (needRows && pickupsChanged) scheduleSync();
+    const pp = (a, b) => { const v = state.pp.get(`${a}>${b}`); return v ? v.t : null; };
+    const ppd = (a, b) => { const v = state.pp.get(`${a}>${b}`); return v ? v.d : null; };
+    state.journeys = F.journeys(state.people, state.cars, { t, d, pp, ppd, pickups: state.pickups });
+    const scored = F.scoreCandidates(state.people, cands, (pid, key) => state.journeys.get(pid).t(key), state.alpha);
     if (!scored.length) {
       if (state.candidates.size && [...state.candidates.values()].every((c) => c.valid !== undefined) && cands.length) {
         setStatus('No route found for everyone.', 'error');
@@ -362,7 +473,7 @@
     state.zone = F.fairZone(scored);
     drawResult();
     renderSummary();
-    if (prevKey !== state.best.cand.key) {
+    if (prevKey !== state.best.cand.key || pickupsChanged) {
       scheduleRoutes();
       scheduleRefine();
       schedulePlace();
@@ -376,7 +487,7 @@
 
   function clearResult() {
     state.best = null; state.zone = null;
-    layers.zone.clearLayers(); layers.routes.clearLayers(); layers.meet.clearLayers();
+    layers.zone.clearLayers(); layers.routes.clearLayers(); layers.meet.clearLayers(); layers.pickups.clearLayers();
     routeLines.clear(); meetMarker = null;
     $('summary').hidden = true;
     $('chip').hidden = true;
@@ -401,33 +512,67 @@
   }
 
   // ---------- Routes ----------
-  const rkey = (p, cand) => `${p.id}@${p.lat.toFixed(5)},${p.lng.toFixed(5)}>${cand.key}`;
+  // A leg is one line on the map: a solo drive, a shared car, or a walk-up drive to a meet point.
+  function legs() {
+    if (!state.best) return [];
+    const venue = meetLatLng();
+    const at = (p) => [p.lat, p.lng];
+    const out = [];
+    const inCar = new Set();
+    for (const car of state.cars) {
+      const members = [car.driver, ...car.passengers];
+      members.forEach((m) => inCar.add(m.id));
+      if (car.mode === 'home') {
+        const j = state.journeys.get(car.driver.id);
+        const order = (j && j.order) || members;
+        out.push({ id: `car${car.driver.id}`, color: car.driver.color, pts: [...order.map(at), venue], people: members.map((m) => m.id), main: true, weight: 6 });
+      } else {
+        const pk = state.pickups.get(car.driver.id);
+        if (!pk) { members.forEach((m) => inCar.delete(m.id)); continue; }
+        for (const m of members) out.push({ id: `to${m.id}`, color: m.color, pts: [at(m), [pk.lat, pk.lng]], people: [m.id], dashed: true });
+        out.push({ id: `car${car.driver.id}`, color: car.driver.color, pts: [[pk.lat, pk.lng], venue], people: members.map((m) => m.id), main: true, weight: 6 });
+      }
+    }
+    for (const p of state.people) if (!inCar.has(p.id)) out.push({ id: `p${p.id}`, color: p.color, pts: [at(p), venue], people: [p.id], main: true });
+    return out;
+  }
+  const legKey = (leg) => leg.pts.map(([a, b]) => `${a.toFixed(5)},${b.toFixed(5)}`).join(';');
 
   function drawRoutes() {
     if (!state.best) return;
-    const cand = state.best.cand;
-    const ll = meetLatLng();
     const live = new Set();
-    for (const p of state.people) {
-      live.add(p.id);
-      const r = state.routes.get(rkey(p, cand));
-      const existing = routeLines.get(p.id);
-      const sig = r ? `r:${rkey(p, cand)}:${p.color}` : `s:${p.lat},${p.lng}>${ll}:${p.color}`;
+    for (const leg of legs()) {
+      live.add(leg.id);
+      const k = legKey(leg);
+      const r = state.routes.get(k);
+      const sig = `${r ? 'r' : 's'}:${k}:${leg.color}`;
+      const existing = routeLines.get(leg.id);
       if (existing && existing.sig === sig) continue;
       if (existing) layers.routes.removeLayer(existing.layer);
+      const w = leg.weight || 4;
       let layer;
       if (r) {
         layer = L.layerGroup([
-          L.polyline(r.coords, { color: '#fff', weight: 7, opacity: 0.85 }),
-          L.polyline(r.coords, { color: p.color, weight: 4, opacity: 0.95 }),
+          L.polyline(r.coords, { color: '#fff', weight: w + 3, opacity: 0.85 }),
+          L.polyline(r.coords, { color: leg.color, weight: w, opacity: 0.95, dashArray: leg.dashed ? '8 6' : null }),
         ]);
       } else {
-        layer = L.polyline([[p.lat, p.lng], ll], { color: p.color, weight: 2.5, opacity: 0.8, dashArray: '2 8' });
+        layer = L.polyline(leg.pts, { color: leg.color, weight: 2.5, opacity: 0.8, dashArray: '2 8' });
       }
       layer.addTo(layers.routes);
-      routeLines.set(p.id, { sig, layer });
+      routeLines.set(leg.id, { sig, layer });
     }
     for (const [id, v] of routeLines) if (!live.has(id)) { layers.routes.removeLayer(v.layer); routeLines.delete(id); }
+    // Meet points.
+    layers.pickups.clearLayers();
+    for (const [did, pk] of state.pickups) {
+      const d = state.people.find((p) => p.id === did);
+      if (!d) continue;
+      L.marker([pk.lat, pk.lng], {
+        icon: L.divIcon({ className: '', html: `<div class="pickup" style="border-color:${d.color}">⇄</div>`, iconSize: [24, 24], iconAnchor: [12, 12] }),
+        zIndexOffset: 900,
+      }).addTo(layers.pickups);
+    }
   }
 
   let routeGen = 0;
@@ -435,26 +580,19 @@
   async function fetchRoutes() {
     if (!state.best) return;
     const gen = ++routeGen;
-    const cand = state.best.cand;
-    const ll = meetLatLng();
-    // Fetch the longest drives first so the most important lines appear first.
-    const order = state.people.map((p, i) => ({ p, t: state.best.times[i] || 0 })).sort((a, b) => b.t - a.t).map((x) => x.p);
-    for (const p of order) {
+    for (const leg of legs()) {
       if (gen !== routeGen) return;
-      const k = rkey(p, cand);
+      const k = legKey(leg);
       if (state.routes.has(k)) continue;
-      const url = `${CFG.osrmUrl}/route/v1/driving/${p.lng.toFixed(5)},${p.lat.toFixed(5)};${ll[1].toFixed(5)},${ll[0].toFixed(5)}?overview=full&geometries=geojson&steps=false`;
+      const url = `${CFG.osrmUrl}/route/v1/driving/${leg.pts.map(([a, b]) => `${b.toFixed(5)},${a.toFixed(5)}`).join(';')}?overview=full&geometries=geojson&steps=false`;
       try {
         const data = await osrmQ(() => (gen === routeGen ? fetchJson(url) : null));
         if (!data) return;
         if (data.code !== 'Ok' || !data.routes || !data.routes.length) continue;
         const route = data.routes[0];
-        state.routes.set(k, {
-          coords: route.geometry.coordinates.map(([x, y]) => [y, x]),
-          duration: route.duration,
-          distance: route.distance,
-          summary: (route.legs[0] && route.legs[0].summary) || '',
-        });
+        const roads = [];
+        for (const l of route.legs || []) for (const n of String(l.summary || '').split(', ')) if (n && !roads.includes(n)) roads.push(n);
+        state.routes.set(k, { coords: route.geometry.coordinates.map(([x, y]) => [y, x]), summary: roads.slice(0, 3).join(', ') });
         if (state.routes.size > 600) state.routes.delete(state.routes.keys().next().value);
         if (gen === routeGen) { drawRoutes(); renderSummary(); }
       } catch (e) { /* keep the straight line */ }
@@ -479,10 +617,17 @@
   }, 1200);
 
   // ---------- Summary ----------
-  function routeInfo(p, i) {
-    const r = state.routes.get(rkey(p, state.best.cand));
-    if (r) return { time: r.duration, dist: r.distance, via: r.summary, exact: true };
-    return { time: state.best.times[i], dist: state.dists.get(tkey(p.id, state.best.cand.key)), via: '', exact: false };
+  function routeInfo(p) {
+    const key = state.best.cand.key;
+    const j = state.journeys.get(p.id);
+    const myLegs = legs().filter((l) => l.main && l.people.includes(p.id));
+    const r = myLegs.length ? state.routes.get(legKey(myLegs[0])) : null;
+    let car = '';
+    if (j && j.car) {
+      const others = [j.car.driver, ...j.car.passengers].filter((m) => m.id !== p.id).map((m) => m.name);
+      car = `${j.car.driver.id === p.id ? 'Driving' : 'With'} ${others.join(', ')}${j.car.mode === 'meet' ? ' · meet point' : ''}`;
+    }
+    return { time: j.t(key), dist: j.d(key), via: r ? r.summary : '', exact: !!r, car };
   }
 
   function renderSummary() {
@@ -494,7 +639,7 @@
     $('place').innerHTML = `${esc(name)}${place && place.area ? `<small>${esc(place.area)}</small>` : '<small>&nbsp;</small>'}
       <a href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}" target="_blank" rel="noopener">Map ↗</a>`;
 
-    const infos = state.people.map((p, i) => ({ p, ...routeInfo(p, i) }));
+    const infos = state.people.map((p) => ({ p, ...routeInfo(p) }));
     const times = infos.map((x) => x.time);
     const max = Math.max(...times), min = Math.min(...times);
     const avg = times.reduce((a, b) => a + b, 0) / times.length;
@@ -509,17 +654,20 @@
     chip.hidden = false;
     chip.innerHTML = `★ <strong>${esc(name)}</strong><span class="sep">·</span>avg ${F.formatDuration(avg)}<span class="sep">·</span>longest ${F.formatDuration(max)}`;
 
+    const cars = state.cars.length ? state.people.length - state.cars.reduce((n, c) => n + c.passengers.length, 0) : 0;
+    if (cars) $('stats').insertAdjacentHTML('beforeend', `<div><dt>Cars</dt><dd>${cars}</dd></div>`);
     const pending = infos.filter((x) => !x.exact).length;
     infos.sort((a, b) => b.time - a.time);
     $('routes').innerHTML = infos.map((x) => {
       const wl = F.weightLabel(x.p.w);
       const bits = [F.formatMiles(x.dist)];
+      if (x.car) bits.push(esc(x.car));
       if (x.via) bits.push(`via ${esc(x.via)}`);
       
       return `<li class="route${x.exact ? '' : ' pending'}" data-id="${x.p.id}" >
         <span class="swatch" style="background:${x.p.color}"></span>
         <span class="r-name">${esc(x.p.name)}</span>
-        <span class="r-time">${x.exact ? '' : '≈ '}${F.formatDuration(x.time)}</span>
+        <span class="r-time">${F.formatDuration(x.time)}</span>
         <span class="r-detail">${bits.join(' · ')}</span>
         <span class="bar"><span style="width:${max ? Math.round((x.time / max) * 100) : 0}%;background:${x.p.color}"></span></span>
       </li>`;
@@ -534,9 +682,12 @@
     if (!li || !state.best) return;
     const p = state.people.find((x) => x.id === Number(li.dataset.id));
     if (!p) return;
-    const r = state.routes.get(rkey(p, state.best.cand));
-    const pts = r ? r.coords : [[p.lat, p.lng], meetLatLng()];
-    map.fitBounds(pts, { padding: [40, 40] });
+    const pts = [];
+    for (const l of legs().filter((x) => x.people.includes(p.id))) {
+      const r = state.routes.get(legKey(l));
+      pts.push(...(r ? r.coords : l.pts));
+    }
+    if (pts.length) map.fitBounds(pts, { padding: [40, 40] });
     if (window.innerWidth <= 820) window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
@@ -665,7 +816,9 @@
 
   // ---------- Save, share, clear ----------
   function serialise() {
-    return { a: Math.round(state.alpha * 100), p: state.people.map((p) => [p.name, p.label, +p.lat.toFixed(5), +p.lng.toFixed(5), p.w]) };
+    const idx = new Map(state.people.map((p, i) => [p.id, i]));
+    return { a: Math.round(state.alpha * 100), p: state.people.map((p) => [p.name, p.label, +p.lat.toFixed(5), +p.lng.toFixed(5), p.w,
+      p.ride != null && idx.has(p.ride) ? idx.get(p.ride) : -1, p.carMode === 'meet' ? 'm' : 'h']) };
   }
   function save() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(serialise())); } catch (e) { /* private mode */ }
@@ -674,11 +827,16 @@
     if (!data || !Array.isArray(data.p)) return;
     state.alpha = Math.min(1, Math.max(0, (Number(data.a) || 75) / 100));
     $('alpha').value = Math.round(state.alpha * 100);
+    const byIndex = [];
+    const rides = [];
     for (const row of data.p.slice(0, CFG.maxPeople)) {
-      const [name, label, lat, lng, w] = row;
-      if (!isFinite(lat) || !isFinite(lng)) continue;
-      state.people.push({ id: nextId++, name: String(name || 'Person'), label: String(label || ''), lat: Number(lat), lng: Number(lng), w: Math.max(-100, Math.min(100, Number(w) || 0)), color: nextColour() });
+      const [name, label, lat, lng, w, ride, mode] = row;
+      if (!isFinite(lat) || !isFinite(lng)) { byIndex.push(null); continue; }
+      const p = { id: nextId++, name: String(name || 'Person'), label: String(label || ''), lat: Number(lat), lng: Number(lng), w: Math.max(-100, Math.min(100, Number(w) || 0)), ride: null, carMode: mode === 'm' ? 'meet' : 'home', color: nextColour() };
+      state.people.push(p); byIndex.push(p); rides.push([p, Number.isInteger(ride) ? ride : -1]);
     }
+    for (const [p, r] of rides) { const d = byIndex[r]; if (d && d !== p) p.ride = d.id; }
+    for (const p of state.people) { const d = state.people.find((q) => q.id === p.ride); if (d && d.ride != null) p.ride = null; }
   }
   const b64 = {
     enc: (s) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
@@ -693,7 +851,7 @@
   $('clear-btn').addEventListener('click', () => {
     if (!state.people.length || !confirm('Clear all?')) return;
     state.people = []; state.times.clear(); state.dists.clear(); state.candidates.clear();
-    state.coarseSpacing = null; state.fineGroups = [];
+    state.coarseSpacing = null; state.fineGroups = []; state.pp.clear(); state.pickups.clear();
     peopleChanged(false);
   });
 
