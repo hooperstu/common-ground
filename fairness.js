@@ -19,7 +19,7 @@
     v = Number(v) || 0;
     if (v <= -80) return { text: 'Much less', cls: 'less' };
     if (v <= -15) return { text: 'Less', cls: 'less' };
-    if (v < 15) return { text: 'Equal share', cls: '' };
+    if (v < 15) return { text: 'Equal', cls: '' };
     if (v < 80) return { text: 'More', cls: 'more' };
     return { text: 'Much more', cls: 'more' };
   }

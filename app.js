@@ -152,7 +152,7 @@
         li.innerHTML = `
           <div class="person-top">
             <span class="swatch"></span>
-            <span class="person-name" tabindex="0" title="Click to rename"></span>
+            <span class="person-name" tabindex="0" ></span>
             <button class="icon-btn" type="button" aria-label="Remove">×</button>
           </div>
           <div class="person-addr"></div>
@@ -205,7 +205,7 @@
 
   // ---------- People changes ----------
   function addPerson({ name, label, lat, lng, w = 0 }) {
-    if (state.people.length >= CFG.maxPeople) { flash(`You can add up to ${CFG.maxPeople} people.`, 'error'); return false; }
+    if (state.people.length >= CFG.maxPeople) { flash(`Max ${CFG.maxPeople}.`, 'error'); return false; }
     const p = { id: nextId++, name: (name || '').trim() || `Person ${state.people.length + 1}`, label, lat, lng, w, color: nextColour() };
     state.people.push(p);
     peopleChanged(true);
@@ -246,7 +246,7 @@
     if (refit) fitAll();
     if (state.people.length < 2) {
       clearResult();
-      setStatus(state.people.length ? 'Add at least one more person to find a meeting point.' : 'Add at least two people to find a meeting point.');
+      setStatus('');
       return;
     }
     recompute();
@@ -307,14 +307,14 @@
     for (const [k, c] of state.candidates) if (!c.fine && !keep.has(k)) state.candidates.delete(k);
     for (const g of grid.points) if (!state.candidates.has(g.key)) state.candidates.set(g.key, { ...g, fine: false });
     try {
-      setStatus('Working out drive times…', 'working');
+      setStatus('Calculating…', 'working');
       await fillMissing([...state.candidates.values()], gen);
       if (gen !== state.syncGen) return;
       await refine(gen);
       if (gen !== state.syncGen) return;
       setStatus('');
     } catch (e) {
-      if (gen === state.syncGen) setStatus(`Couldn't reach the free routing service (${e.message}). It may be busy, so try again in a minute.`, 'error');
+      if (gen === state.syncGen) setStatus('Routing service busy. Try again shortly.', 'error');
     }
   }
 
@@ -353,7 +353,7 @@
     const scored = F.scoreCandidates(state.people, cands, (pid, key) => state.times.get(tkey(pid, key)), state.alpha);
     if (!scored.length) {
       if (state.candidates.size && [...state.candidates.values()].every((c) => c.valid !== undefined) && cands.length) {
-        setStatus('No spot could be reached by car from everyone. Check the addresses.', 'error');
+        setStatus('No route found for everyone.', 'error');
       }
       return;
     }
@@ -387,7 +387,7 @@
     layers.zone.clearLayers();
     if (state.zone) {
       L.polygon(state.zone.polygon, { color: '#111', weight: 1.5, dashArray: '5 5', fillColor: '#4f46e5', fillOpacity: 0.12, interactive: true })
-        .bindTooltip(`Fair zone: anywhere in here is within about ${Math.max(3, Math.round(state.zone.tolSeconds / 60))} min of the best balance`, { sticky: true })
+        
         .addTo(layers.zone);
     }
     if (!meetMarker) {
@@ -395,7 +395,7 @@
         icon: L.divIcon({ className: '', html: '<div class="meet" aria-label="Meeting point">★</div>', iconSize: [34, 34], iconAnchor: [17, 17] }),
         zIndexOffset: 1000,
       }).addTo(layers.meet);
-      meetMarker.bindTooltip('Fairest meeting point', { className: 'meet-tip' });
+      
     } else meetMarker.setLatLng(ll);
     drawRoutes();
   }
@@ -491,19 +491,18 @@
     const [lat, lng] = meetLatLng();
     const place = state.places.get(`${lat.toFixed(3)},${lng.toFixed(3)}`);
     const name = place && place.town ? place.town : `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-    $('place').innerHTML = `Near ${esc(name)}${place && place.area ? `<small>${esc(place.area)}</small>` : '<small>&nbsp;</small>'}
-      <a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=13/${lat}/${lng}" target="_blank" rel="noopener">Open in OpenStreetMap</a>
-      <a href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}" target="_blank" rel="noopener">Open in Google Maps</a>`;
+    $('place').innerHTML = `${esc(name)}${place && place.area ? `<small>${esc(place.area)}</small>` : '<small>&nbsp;</small>'}
+      <a href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}" target="_blank" rel="noopener">Map ↗</a>`;
 
     const infos = state.people.map((p, i) => ({ p, ...routeInfo(p, i) }));
     const times = infos.map((x) => x.time);
     const max = Math.max(...times), min = Math.min(...times);
     const avg = times.reduce((a, b) => a + b, 0) / times.length;
     $('stats').innerHTML = [
-      ['Average drive', F.formatDuration(avg)],
-      ['Longest drive', F.formatDuration(max)],
-      ['Shortest drive', F.formatDuration(min)],
-      ['Gap longest to shortest', F.formatDuration(max - min)],
+      ['Average', F.formatDuration(avg)],
+      ['Longest', F.formatDuration(max)],
+      ['Shortest', F.formatDuration(min)],
+      ['Gap', F.formatDuration(max - min)],
     ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
 
     const chip = $('chip');
@@ -516,8 +515,8 @@
       const wl = F.weightLabel(x.p.w);
       const bits = [F.formatMiles(x.dist)];
       if (x.via) bits.push(`via ${esc(x.via)}`);
-      if (wl.cls) bits.push(`travels ${wl.text.toLowerCase()}`);
-      return `<li class="route${x.exact ? '' : ' pending'}" data-id="${x.p.id}" title="Show this route">
+      
+      return `<li class="route${x.exact ? '' : ' pending'}" data-id="${x.p.id}" >
         <span class="swatch" style="background:${x.p.color}"></span>
         <span class="r-name">${esc(x.p.name)}</span>
         <span class="r-time">${x.exact ? '' : '≈ '}${F.formatDuration(x.time)}</span>
@@ -526,7 +525,7 @@
       </li>`;
     }).join('');
     if (pending && !$('status').classList.contains('error') && !$('status').classList.contains('working')) {
-      setStatus(`Drawing roads… ${state.people.length - pending}/${state.people.length}`, 'working', true);
+      setStatus(`Routes ${state.people.length - pending}/${state.people.length}`, 'working', true);
     } else if (!pending && $('status').dataset.routes) setStatus('');
   }
 
@@ -586,16 +585,16 @@
     if (!q.trim()) return;
     const btn = e.submitter || $('add-form').querySelector('button');
     btn.disabled = true;
-    flash('Searching…');
+    flash('');
     $('search-results').hidden = true;
     try {
       const results = await lookup(q);
-      if (!results.length) { flash('No match found in the UK. Try a postcode or a fuller address.', 'error'); return; }
+      if (!results.length) { flash('Not found.', 'error'); return; }
       if (results.length === 1) {
-        if (addPerson({ name, ...results[0] })) { flash(`Added ${results[0].label}`, 'ok'); resetAddForm(); }
+        if (addPerson({ name, ...results[0] })) { flash(''); resetAddForm(); }
         return;
       }
-      flash('Pick the right one:');
+      flash('');
       const ul = $('search-results');
       ul.innerHTML = '';
       results.forEach((r) => {
@@ -603,14 +602,14 @@
         const b = document.createElement('button');
         b.type = 'button'; b.textContent = r.label;
         b.addEventListener('click', () => {
-          if (addPerson({ name, ...r })) { flash(`Added ${r.label}`, 'ok'); resetAddForm(); }
+          if (addPerson({ name, ...r })) { flash(''); resetAddForm(); }
           ul.hidden = true;
         });
         li.appendChild(b); ul.appendChild(li);
       });
       ul.hidden = false;
     } catch (err) {
-      flash(`Lookup failed (${err.message}). Please try again.`, 'error');
+      flash('Lookup failed.', 'error');
     } finally { btn.disabled = false; }
   });
 
@@ -644,8 +643,8 @@
       } catch (e) { /* fall back to one by one below */ }
     }
     for (const [i, r] of rows.entries()) {
-      if (state.people.length >= CFG.maxPeople) { failed.push(`${r.line} (limit reached)`); continue; }
-      flash(`Adding ${i + 1} of ${rows.length}…`);
+      if (state.people.length >= CFG.maxPeople) { failed.push(r.line); continue; }
+      
       try {
         let hit = null;
         const pc = pcResults.get(r.q);
@@ -657,7 +656,7 @@
     }
     btn.disabled = false;
     $('bulk-text').value = failed.join('\n');
-    flash(failed.length ? `Added ${added}. Couldn't find ${failed.length} (left in the box to fix).` : `Added ${added}.`, failed.length ? 'error' : 'ok');
+    flash(failed.length ? `${failed.length} not found.` : '', failed.length ? 'error' : '');
   });
 
   // ---------- Fairness balance ----------
@@ -688,11 +687,11 @@
 
   $('share-btn').addEventListener('click', async () => {
     const url = `${location.origin}${location.pathname}#d=${b64.enc(JSON.stringify(serialise()))}`;
-    try { await navigator.clipboard.writeText(url); flash('Share link copied. Anyone with it sees this list.', 'ok'); } catch (e) { prompt('Copy this link:', url); }
+    try { await navigator.clipboard.writeText(url); flash('Link copied.', 'ok'); } catch (e) { prompt('', url); }
   });
 
   $('clear-btn').addEventListener('click', () => {
-    if (!state.people.length || !confirm('Remove everyone from the list?')) return;
+    if (!state.people.length || !confirm('Clear all?')) return;
     state.people = []; state.times.clear(); state.dists.clear(); state.candidates.clear();
     state.coarseSpacing = null; state.fineGroups = [];
     peopleChanged(false);
