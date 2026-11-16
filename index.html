@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Common Ground</title>
+  <meta name="description" content="Find the fairest place for a group to meet, balancing everyone's drive time.">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="panel" id="panel">
+      <header class="brand">
+        <h1>Common Ground</h1>
+        <p>Add up to 30 people. The fairest meeting point updates live as you change things.</p>
+      </header>
+
+      <section class="card" aria-labelledby="add-h">
+        <h2 id="add-h">Add a person</h2>
+        <form id="add-form" autocomplete="off">
+          <label for="add-name">Name</label>
+          <input id="add-name" type="text" placeholder="e.g. Grandma Jean" maxlength="40">
+          <label for="add-query">Postcode or address</label>
+          <div class="row">
+            <input id="add-query" type="text" placeholder="e.g. LS1 4AP or 12 High St, York" required>
+            <button type="submit" class="btn primary">Find</button>
+          </div>
+        </form>
+        <ul id="search-results" class="results" hidden></ul>
+        <details class="bulk">
+          <summary>Paste a list instead</summary>
+          <p class="hint">One person per line: <code>Name, postcode or address</code></p>
+          <textarea id="bulk-text" rows="5" placeholder="Jean, YO1 7HH&#10;Sam, M1 1AE&#10;Priya, 10 Park Road, Bristol"></textarea>
+          <button id="bulk-add" class="btn" type="button">Add all</button>
+        </details>
+        <p id="add-msg" class="msg" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="card" aria-labelledby="people-h">
+        <div class="card-head">
+          <h2 id="people-h">People <span id="people-count" class="count">0/30</span></h2>
+          <div class="head-actions">
+            <button id="share-btn" class="btn small" type="button" title="Copy a link containing this list">Share link</button>
+            <button id="clear-btn" class="btn small ghost" type="button">Clear all</button>
+          </div>
+        </div>
+        <p class="hint">Slide left for people who should travel less (for example elderly or vulnerable relatives), right for people happy to travel more. Drag a pin on the map to fine-tune where someone starts.</p>
+        <ol id="people" class="people"></ol>
+        <p id="people-empty" class="empty">No one added yet.</p>
+      </section>
+
+      <section class="card" aria-labelledby="balance-h">
+        <h2 id="balance-h">What does fair mean?</h2>
+        <input id="alpha" type="range" min="0" max="100" value="75" aria-describedby="alpha-desc">
+        <div class="scale"><span>Least total driving</span><span>Most even driving</span></div>
+        <p id="alpha-desc" class="hint">Towards "most even", no one gets stuck with a much longer drive than everyone else. Towards "least total", the group's combined driving is as low as possible.</p>
+      </section>
+
+      <section class="card" aria-labelledby="sum-h" id="summary-card">
+        <h2 id="sum-h">Meeting point</h2>
+        <div id="status" class="status" role="status" aria-live="polite">Add at least two people to find a meeting point.</div>
+        <div id="summary" hidden>
+          <div id="place" class="place"></div>
+          <dl class="stats" id="stats"></dl>
+          <h3>Each route</h3>
+          <ol id="routes" class="routes"></ol>
+          <p class="hint small">Drive times are typical car times from OpenStreetMap routing, without live traffic.</p>
+        </div>
+      </section>
+
+      <footer class="foot">
+        Free and open: map data © OpenStreetMap contributors, routing by OSRM, postcodes by postcodes.io.
+      </footer>
+    </aside>
+    <main class="map-wrap">
+      <div id="map" aria-label="Map"></div>
+      <div id="chip" class="chip" hidden aria-live="polite"></div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="config.js"></script>
+  <script src="fairness.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
