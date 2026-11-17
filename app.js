@@ -161,16 +161,14 @@
             <button class="icon-btn" type="button" aria-label="Remove">×</button>
           </div>
           <div class="person-addr"></div>
-          <div class="weight">
+          <div class="controls">
             <input type="range" min="-100" max="100" step="1" aria-label="Travel less or more">
             <span class="weight-label"></span>
-          </div>
-          <div class="lift">
-            <select class="ride" aria-label="Car"></select>
-            <select class="mode" aria-label="Pickup" hidden>
-              <option value="home">Home pickup</option>
-              <option value="meet">Meet point</option>
-            </select>
+            <div class="select-wrap"><select class="ride" aria-label="Car"></select></div>
+            <div class="seg mode" role="group" aria-label="Pickup" hidden>
+              <button type="button" data-mode="home" title="Pick up from home">Home</button>
+              <button type="button" data-mode="meet" title="Meet at a pickup point">Meet</button>
+            </div>
           </div>`;
         const range = li.querySelector('input[type=range]');
         range.addEventListener('input', () => setWeight(p.id, Number(range.value)));
@@ -178,7 +176,7 @@
         range.addEventListener('dblclick', () => { range.value = 0; setWeight(p.id, 0); save(); scheduleRefine(); });
         li.querySelector('.icon-btn').addEventListener('click', () => removePerson(p.id));
         li.querySelector('.ride').addEventListener('change', (e) => setRide(p.id, e.target.value === '' ? null : Number(e.target.value)));
-        li.querySelector('.mode').addEventListener('change', (e) => setMode(p.id, e.target.value));
+        li.querySelector('.mode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(p.id, b.dataset.mode); });
         const nameEl = li.querySelector('.person-name');
         const startRename = () => renamePerson(p.id, nameEl);
         nameEl.addEventListener('click', startRename);
@@ -213,7 +211,9 @@
     sel.classList.toggle('on', p.ride != null || hasPassengers);
     const mode = li.querySelector('.mode');
     mode.hidden = !hasPassengers;
-    mode.value = p.carMode === 'meet' ? 'meet' : 'home';
+    li.querySelector('.controls').classList.toggle('driving', hasPassengers);
+    const cur = p.carMode === 'meet' ? 'meet' : 'home';
+    mode.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === cur)));
   }
 
   function setRide(id, driverId) {
