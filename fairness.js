@@ -195,7 +195,7 @@
     return (2 * 6371 * Math.asin(Math.sqrt(x)) * 1.25 / 75) * 3600;
   }
 
-  // Meet point for a car: keeps the longest drive to it short and sits on the way to the venue.
+  // Meet point for a car: keeps the longest drive to it short, leaning slightly towards the venue.
   // t(originId, key) = seconds; toward (optional) = {lat, lng} of the likely venue.
   function choosePickup(members, candidates, t, toward) {
     let best = null, bestScore = Infinity;
@@ -208,7 +208,8 @@
         sum += v;
       }
       if (!ok) continue;
-      const sc = max + 0.1 * sum + (toward ? roughSeconds(c, toward) : 0);
+      // Stay near the people being picked up; leaning towards the venue only breaks near-ties.
+      const sc = max + 0.2 * sum + (toward ? 0.25 * roughSeconds(c, toward) : 0);
       if (sc < bestScore) { bestScore = sc; best = c; }
     }
     return best;

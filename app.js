@@ -387,6 +387,13 @@
     const keep = new Set(grid.points.map((g) => g.key));
     for (const [k, c] of state.candidates) if (!c.fine && !keep.has(k)) state.candidates.delete(k);
     for (const g of grid.points) if (!state.candidates.has(g.key)) state.candidates.set(g.key, { ...g, fine: false });
+    // Finer spots around each lift-share car's members, so meet points can sit close to home.
+    for (const car of F.buildCars(state.people)) {
+      if (car.mode !== 'meet') continue;
+      const ms = [car.driver, ...car.passengers];
+      const mid = { lat: ms.reduce((a, m) => a + m.lat, 0) / ms.length, lng: ms.reduce((a, m) => a + m.lng, 0) / ms.length };
+      for (const g of F.fineGrid(mid, Math.max(state.coarseSpacing, 6)).points) if (!state.candidates.has(g.key)) state.candidates.set(g.key, { ...g, fine: true, pickupGrid: true });
+    }
     try {
       setStatus('Calculating…', 'working');
       await fillMissing([...state.candidates.values()], gen);
