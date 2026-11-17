@@ -42,11 +42,12 @@
     d.cancel = () => clearTimeout(t);
     return d;
   }
+  // 30 distinct colours, one per person, most distinct first.
+  const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#9a6324', '#469990', '#000075',
+    '#800000', '#808000', '#ffe119', '#000000', '#bfef45', '#ff8fab', '#a78bfa', '#6b7280', '#00a36c', '#c71585',
+    '#14532d', '#7c2d12', '#0369a1', '#d2b48c', '#93c5fd', '#65a30d', '#ca8a04', '#155e75', '#a3a3a3', '#ff4500'];
   function colourFor(i) {
-    const fixed = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa1a8', '#d6297a', '#7a9a01',
-      '#9a6324', '#1f77b4', '#800000', '#2e8b57', '#000075', '#b8860b', '#6a3d9a', '#ff1493'];
-    if (i < fixed.length) return fixed[i];
-    return `hsl(${Math.round((i * 137.508) % 360)}, 68%, ${i % 2 ? 38 : 48}%)`;
+    return PALETTE[i % PALETTE.length];
   }
   function nextColour() {
     const used = new Set(state.people.map((p) => p.color));
@@ -545,13 +546,24 @@
       live.add(leg.id);
       const k = legKey(leg);
       const r = state.routes.get(k);
-      const sig = `${r ? 'r' : 's'}:${k}:${leg.color}`;
+      const sig = `${r ? 'r' : 's'}:${k}:${leg.color}:${leg.people.join(',')}`;
       const existing = routeLines.get(leg.id);
       if (existing && existing.sig === sig) continue;
       if (existing) layers.routes.removeLayer(existing.layer);
       const w = leg.weight || 4;
       let layer;
-      if (r) {
+      const colors = leg.people.length > 1 ? leg.people.map((id) => (state.people.find((q) => q.id === id) || {}).color).filter(Boolean) : [];
+      if (r && colors.length > 1) {
+        // Shared car: alternating dashes in the colour of everyone on board, starting with the driver.
+        const dash = 14;
+        layer = L.layerGroup([
+          L.polyline(r.coords, { color: '#fff', weight: w + 3, opacity: 0.9, lineCap: 'butt' }),
+          ...colors.map((c, i) => L.polyline(r.coords, {
+            color: c, weight: w, opacity: 1, lineCap: 'butt',
+            dashArray: `${dash} ${dash * (colors.length - 1)}`, dashOffset: String(-dash * i),
+          })),
+        ]);
+      } else if (r) {
         layer = L.layerGroup([
           L.polyline(r.coords, { color: '#fff', weight: w + 3, opacity: 0.85 }),
           L.polyline(r.coords, { color: leg.color, weight: w, opacity: 0.95, dashArray: leg.dashed ? '8 6' : null }),
