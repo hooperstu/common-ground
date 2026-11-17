@@ -67,3 +67,18 @@ console.log('lift share tests passed');
   assert.strictEqual(pick.key, 'near');
 }
 console.log('meet point tests passed');
+
+// A passenger's slider never moves the venue; only the driver's does.
+{
+  const ppl = [{ id: 1, w: 0, ride: null, carMode: 'meet' }, { id: 2, w: 100, ride: 1 }, { id: 3, w: 0, ride: null }];
+  const cars = F.buildCars(ppl);
+  assert.deepStrictEqual(F.venueWeights(ppl, cars).map((x) => x.w), [0, 0, 0]);
+  ppl[0].w = -50;
+  assert.deepStrictEqual(F.venueWeights(ppl, cars).map((x) => x.w), [-50, -50, 0]);
+  // Passenger's slider does shape the meet point: a "travel less" passenger gets a shorter leg.
+  const t = (o, k) => ({ A: { 1: 600, 2: 1800 }, B: { 1: 1500, 2: 900 } })[k][o];
+  const cands = [{ key: 'A' }, { key: 'B' }];
+  assert.strictEqual(F.choosePickup([{ id: 1, w: 0 }, { id: 2, w: 0 }], cands, t).key, 'B');
+  assert.strictEqual(F.choosePickup([{ id: 1, w: -100 }, { id: 2, w: 100 }], cands, t).key, 'A');
+}
+console.log('passenger slider tests passed');
