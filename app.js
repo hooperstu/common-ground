@@ -200,7 +200,7 @@
     const drivers = state.people.filter((q) => q.id !== p.id && q.ride == null);
     const opts = hasPassengers
       ? [['', 'Driving']]
-      : [['', 'Own car'], ...drivers.map((q) => [String(q.id), `With ${q.name}`])];
+      : [['', 'Own car'], ...drivers.map((q) => [String(q.id), `In ${q.name}’s car`])];
     const sig = JSON.stringify(opts);
     if (sel.dataset.sig !== sig) {
       sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join('');
