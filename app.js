@@ -42,11 +42,12 @@
     d.cancel = () => clearTimeout(t);
     return d;
   }
+  // 30 distinct colours, one per person, most distinct first.
+  const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#9a6324', '#469990', '#000075',
+    '#800000', '#808000', '#ffe119', '#000000', '#bfef45', '#ff8fab', '#a78bfa', '#6b7280', '#00a36c', '#c71585',
+    '#14532d', '#7c2d12', '#0369a1', '#d2b48c', '#93c5fd', '#65a30d', '#ca8a04', '#155e75', '#a3a3a3', '#ff4500'];
   function colourFor(i) {
-    const fixed = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa1a8', '#d6297a', '#7a9a01',
-      '#9a6324', '#1f77b4', '#800000', '#2e8b57', '#000075', '#b8860b', '#6a3d9a', '#ff1493'];
-    if (i < fixed.length) return fixed[i];
-    return `hsl(${Math.round((i * 137.508) % 360)}, 68%, ${i % 2 ? 38 : 48}%)`;
+    return PALETTE[i % PALETTE.length];
   }
   function nextColour() {
     const used = new Set(state.people.map((p) => p.color));
@@ -161,16 +162,14 @@
             <button class="icon-btn" type="button" aria-label="Remove">×</button>
           </div>
           <div class="person-addr"></div>
-          <div class="weight">
+          <div class="controls">
             <input type="range" min="-100" max="100" step="1" aria-label="Travel less or more">
             <span class="weight-label"></span>
-          </div>
-          <div class="lift">
-            <select class="ride" aria-label="Car"></select>
-            <select class="mode" aria-label="Pickup" hidden>
-              <option value="home">Home pickup</option>
-              <option value="meet">Meet point</option>
-            </select>
+            <div class="select-wrap"><select class="ride" aria-label="Car"></select></div>
+            <div class="seg mode" role="group" aria-label="Pickup" hidden>
+              <button type="button" data-mode="home" title="Pick up from home">Home</button>
+              <button type="button" data-mode="meet" title="Meet at a pickup point">Meet</button>
+            </div>
           </div>`;
         const range = li.querySelector('input[type=range]');
         range.addEventListener('input', () => setWeight(p.id, Number(range.value)));
@@ -178,7 +177,7 @@
         range.addEventListener('dblclick', () => { range.value = 0; setWeight(p.id, 0); save(); scheduleRefine(); });
         li.querySelector('.icon-btn').addEventListener('click', () => removePerson(p.id));
         li.querySelector('.ride').addEventListener('change', (e) => setRide(p.id, e.target.value === '' ? null : Number(e.target.value)));
-        li.querySelector('.mode').addEventListener('change', (e) => setMode(p.id, e.target.value));
+        li.querySelector('.mode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(p.id, b.dataset.mode); });
         const nameEl = li.querySelector('.person-name');
         const startRename = () => renamePerson(p.id, nameEl);
         nameEl.addEventListener('click', startRename);
@@ -202,7 +201,7 @@
     const drivers = state.people.filter((q) => q.id !== p.id && q.ride == null);
     const opts = hasPassengers
       ? [['', 'Driving']]
-      : [['', 'Own car'], ...drivers.map((q) => [String(q.id), `With ${q.name}`])];
+      : [['', 'Own car'], ...drivers.map((q) => [String(q.id), `In ${q.name}’s car`])];
     const sig = JSON.stringify(opts);
     if (sel.dataset.sig !== sig) {
       sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join('');
@@ -213,7 +212,9 @@
     sel.classList.toggle('on', p.ride != null || hasPassengers);
     const mode = li.querySelector('.mode');
     mode.hidden = !hasPassengers;
-    mode.value = p.carMode === 'meet' ? 'meet' : 'home';
+    li.querySelector('.controls').classList.toggle('driving', hasPassengers);
+    const cur = p.carMode === 'meet' ? 'meet' : 'home';
+    mode.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === cur)));
   }
 
   function setRide(id, driverId) {
@@ -386,6 +387,13 @@
     const keep = new Set(grid.points.map((g) => g.key));
     for (const [k, c] of state.candidates) if (!c.fine && !keep.has(k)) state.candidates.delete(k);
     for (const g of grid.points) if (!state.candidates.has(g.key)) state.candidates.set(g.key, { ...g, fine: false });
+    // Finer spots around each lift-share car's members, so meet points can sit close to home.
+    for (const car of F.buildCars(state.people)) {
+      if (car.mode !== 'meet') continue;
+      const ms = [car.driver, ...car.passengers];
+      const mid = { lat: ms.reduce((a, m) => a + m.lat, 0) / ms.length, lng: ms.reduce((a, m) => a + m.lng, 0) / ms.length };
+      for (const g of F.fineGrid(mid, Math.max(state.coarseSpacing, 6)).points) if (!state.candidates.has(g.key)) state.candidates.set(g.key, { ...g, fine: true, pickupGrid: true });
+    }
     try {
       setStatus('Calculating…', 'working');
       await fillMissing([...state.candidates.values()], gen);
@@ -545,13 +553,24 @@
       live.add(leg.id);
       const k = legKey(leg);
       const r = state.routes.get(k);
-      const sig = `${r ? 'r' : 's'}:${k}:${leg.color}`;
+      const sig = `${r ? 'r' : 's'}:${k}:${leg.color}:${leg.people.join(',')}`;
       const existing = routeLines.get(leg.id);
       if (existing && existing.sig === sig) continue;
       if (existing) layers.routes.removeLayer(existing.layer);
       const w = leg.weight || 4;
       let layer;
-      if (r) {
+      const colors = leg.people.length > 1 ? leg.people.map((id) => (state.people.find((q) => q.id === id) || {}).color).filter(Boolean) : [];
+      if (r && colors.length > 1) {
+        // Shared car: alternating dashes in the colour of everyone on board, starting with the driver.
+        const dash = 14;
+        layer = L.layerGroup([
+          L.polyline(r.coords, { color: '#fff', weight: w + 3, opacity: 0.9, lineCap: 'butt' }),
+          ...colors.map((c, i) => L.polyline(r.coords, {
+            color: c, weight: w, opacity: 1, lineCap: 'butt',
+            dashArray: `${dash} ${dash * (colors.length - 1)}`, dashOffset: String(-dash * i),
+          })),
+        ]);
+      } else if (r) {
         layer = L.layerGroup([
           L.polyline(r.coords, { color: '#fff', weight: w + 3, opacity: 0.85 }),
           L.polyline(r.coords, { color: leg.color, weight: w, opacity: 0.95, dashArray: leg.dashed ? '8 6' : null }),

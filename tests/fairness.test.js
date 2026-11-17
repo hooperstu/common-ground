@@ -57,3 +57,13 @@ console.log('fairness tests passed');
   assert.strictEqual(F.buildCars([{ id: 1, ride: 2 }, { id: 2, ride: 3 }, { id: 3, ride: null }]).length, 1);
 }
 console.log('lift share tests passed');
+
+// Meet point stays near the people sharing, even when the venue is far away.
+{
+  const near = { key: 'near', lat: 51.43, lng: -1.15 };
+  const far = { key: 'far', lat: 54.0, lng: -2.8 };
+  const t = (o, k) => (k === 'near' ? 900 : 4 * 3600 + 900);
+  const pick = F.choosePickup([{ id: 1 }, { id: 2 }], [near, far], t, { lat: 55.5, lng: -2.5 });
+  assert.strictEqual(pick.key, 'near');
+}
+console.log('meet point tests passed');
