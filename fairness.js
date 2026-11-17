@@ -202,8 +202,10 @@
     for (const c of candidates) {
       let max = 0, sum = 0, ok = true;
       for (const m of members) {
-        const v = t(m.id, c.key);
-        if (v == null) { ok = false; break; }
+        const raw = t(m.id, c.key);
+        if (raw == null) { ok = false; break; }
+        // Each person's own slider shapes only their drive to the meet point.
+        const v = raw * weightMultiplier(m.w);
         if (v > max) max = v;
         sum += v;
       }
@@ -217,6 +219,14 @@
 
   // Build per-person journey lookups. Returns {time(pid, key), dist(pid, key), plan: Map pid -> description}.
   // opts: t(originId, key), d(originId, key), pp(a, b), ppd(a, b), pickups: Map driverId -> {key, originId}.
+  // Weights used to pick the venue: everyone in a car shares the driver's slider, so a
+  // passenger's own slider never moves the venue.
+  function venueWeights(people, cars) {
+    const w = new Map(people.map((p) => [p.id, p.w]));
+    for (const car of cars) for (const q of car.passengers) w.set(q.id, car.driver.w);
+    return people.map((p) => ({ id: p.id, w: w.get(p.id) }));
+  }
+
   function journeys(people, cars, opts) {
     const fn = new Map();
     const sum = (a, b) => (a == null || b == null ? null : a + b);
@@ -249,7 +259,7 @@
   }
 
   const api = {
-    buildCars, pickupOrder, choosePickup, journeys, roughSeconds,
+    buildCars, pickupOrder, choosePickup, journeys, roughSeconds, venueWeights,
     weightMultiplier, weightLabel, coarseGrid, fineGrid, scoreCandidates, fairZone,
     formatDuration, formatMiles, bbox, kmPerDegLng, KM_PER_DEG_LAT,
   };

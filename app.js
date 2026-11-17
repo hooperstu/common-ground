@@ -26,8 +26,10 @@
     places: new Map(),
     pp: new Map(), // `${a}>${b}` -> {t, d} home-to-home drive
     cars: [],
-    pickups: new Map(), // driverId -> {key, originId, lat, lng}
+    pickups: new Map(), // driverId -> {key, originId, lat, lng} shown on the map
+    venuePickups: new Map(), // neutral meet points used to choose the venue
     journeys: null,
+    selected: null,
     syncGen: 0,
   };
   let nextId = 1;
@@ -121,6 +123,7 @@
       let m = markers.get(p.id);
       if (!m) {
         m = L.marker([p.lat, p.lng], { draggable: true, icon: personIcon(p), autoPan: true }).addTo(layers.people);
+        m.on('click', () => selectPerson(state.selected === p.id ? null : p.id));
         m.on('dragend', () => {
           const ll = m.getLatLng();
           movePerson(p.id, ll.lat, ll.lng);
@@ -212,6 +215,11 @@
     sel.classList.toggle('on', p.ride != null || hasPassengers);
     const mode = li.querySelector('.mode');
     mode.hidden = !hasPassengers;
+    const driver = state.people.find((q) => q.id === p.ride);
+    const noEffect = !!driver && driver.carMode !== 'meet';
+    const range = li.querySelector('input[type=range]');
+    range.disabled = noEffect;
+    li.querySelector('.controls').classList.toggle('no-weight', noEffect);
     li.querySelector('.controls').classList.toggle('driving', hasPassengers);
     const cur = p.carMode === 'meet' ? 'meet' : 'home';
     mode.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === cur)));
@@ -318,7 +326,8 @@
 
   // Origins are people plus any lift-share meet points.
   function origins() {
-    return [...state.people, ...[...state.pickups.values()].map((pk) => ({ id: pk.originId, lat: pk.lat, lng: pk.lng }))];
+    const pks = new Map([...state.pickups.values(), ...state.venuePickups.values()].map((pk) => [pk.originId, pk]));
+    return [...state.people, ...[...pks.values()].map((pk) => ({ id: pk.originId, lat: pk.lat, lng: pk.lng }))];
   }
 
   async function fetchMatrix(people, cands, gen) {
@@ -380,7 +389,7 @@
     const grid = F.coarseGrid(state.people);
     if (grid.spacing !== state.coarseSpacing) {
       // The area changed a lot: start a fresh grid.
-      state.candidates.clear(); state.times.clear(); state.dists.clear(); state.fineGroups = []; state.pickups.clear();
+      state.candidates.clear(); state.times.clear(); state.dists.clear(); state.fineGroups = []; state.pickups.clear(); state.venuePickups.clear();
       state.coarseSpacing = grid.spacing;
     }
     // Keep fine points and coarse points still inside the area; add any new coarse points.
@@ -446,30 +455,39 @@
     const t = (o, k) => state.times.get(tkey(o, k));
     const d = (o, k) => state.dists.get(tkey(o, k));
     state.cars = F.buildCars(state.people);
-    // Choose a meet point for each meet-mode car (depends only on where the car's members live).
-    const newPickups = new Map();
-    let needRows = false;
+    // Meet points. The venue is chosen using neutral meet points (no sliders), so a passenger's slider
+    // never moves the venue; the meet point actually shown follows each member's own slider.
     const gridReady = ![...state.candidates.values()].some((c) => c.valid === undefined);
-    // Likely venue ignoring cars and weights, so meet points sit on the way there and stay put while sliders move.
     const anchorHit = state.cars.some((c) => c.mode === 'meet') && F.scoreCandidates(state.people.map((p) => ({ id: p.id, w: 0 })), cands, t, 0.75)[0];
     const anchor = anchorHit ? anchorHit.cand : null;
-    for (const car of state.cars) {
-      if (car.mode !== 'meet') continue;
-      if (!gridReady) { const old = state.pickups.get(car.driver.id); if (old) newPickups.set(car.driver.id, old); continue; }
-      const pc = F.choosePickup([car.driver, ...car.passengers], cands, t, anchor);
-      if (!pc) continue;
-      const ll = pc.snapped || [pc.lat, pc.lng];
-      const pk = { key: pc.key, originId: `x:${pc.key}`, lat: ll[0], lng: ll[1] };
-      newPickups.set(car.driver.id, pk);
-      if (cands.some((c) => !state.times.has(tkey(pk.originId, c.key)))) needRows = true;
-    }
-    const pickupsChanged = JSON.stringify([...newPickups]) !== JSON.stringify([...state.pickups]);
+    let needRows = false;
+    const pickFor = (old, weighted) => {
+      const out = new Map();
+      for (const car of state.cars) {
+        if (car.mode !== 'meet') continue;
+        if (!gridReady) { const o = old.get(car.driver.id); if (o) out.set(car.driver.id, o); continue; }
+        const members = [car.driver, ...car.passengers].map((m) => ({ id: m.id, w: weighted ? m.w : 0 }));
+        const pc = F.choosePickup(members, cands, t, anchor);
+        if (!pc) continue;
+        const ll = pc.snapped || [pc.lat, pc.lng];
+        const pk = { key: pc.key, originId: `x:${pc.key}`, lat: ll[0], lng: ll[1] };
+        out.set(car.driver.id, pk);
+        if (cands.some((c) => !state.times.has(tkey(pk.originId, c.key)))) needRows = true;
+      }
+      return out;
+    };
+    const newVenuePickups = pickFor(state.venuePickups, false);
+    const newPickups = pickFor(state.pickups, true);
+    const pickupsChanged = JSON.stringify([...newPickups]) !== JSON.stringify([...state.pickups]) ||
+      JSON.stringify([...newVenuePickups]) !== JSON.stringify([...state.venuePickups]);
     state.pickups = newPickups;
+    state.venuePickups = newVenuePickups;
     if (needRows && pickupsChanged) scheduleSync();
     const pp = (a, b) => { const v = state.pp.get(`${a}>${b}`); return v ? v.t : null; };
     const ppd = (a, b) => { const v = state.pp.get(`${a}>${b}`); return v ? v.d : null; };
     state.journeys = F.journeys(state.people, state.cars, { t, d, pp, ppd, pickups: state.pickups });
-    const scored = F.scoreCandidates(state.people, cands, (pid, key) => state.journeys.get(pid).t(key), state.alpha);
+    const venueJourneys = F.journeys(state.people, state.cars, { t, d, pp, ppd, pickups: state.venuePickups });
+    const scored = F.scoreCandidates(F.venueWeights(state.people, state.cars), cands, (pid, key) => venueJourneys.get(pid).t(key), state.alpha);
     if (!scored.length) {
       if (state.candidates.size && [...state.candidates.values()].every((c) => c.valid !== undefined) && cands.length) {
         setStatus('No route found for everyone.', 'error');
@@ -579,9 +597,11 @@
         layer = L.polyline(leg.pts, { color: leg.color, weight: 2.5, opacity: 0.8, dashArray: '2 8' });
       }
       layer.addTo(layers.routes);
-      routeLines.set(leg.id, { sig, layer });
+      layer.on('click', (ev) => { L.DomEvent.stopPropagation(ev); selectPerson(leg.people.includes(state.selected) ? null : leg.people[0]); });
+      routeLines.set(leg.id, { sig, layer, people: leg.people });
     }
     for (const [id, v] of routeLines) if (!live.has(id)) { layers.routes.removeLayer(v.layer); routeLines.delete(id); }
+    applySelection();
     // Meet points.
     layers.pickups.clearLayers();
     for (const [did, pk] of state.pickups) {
@@ -691,16 +711,43 @@
         <span class="bar"><span style="width:${max ? Math.round((x.time / max) * 100) : 0}%;background:${x.p.color}"></span></span>
       </li>`;
     }).join('');
+    applySelection();
     if (pending && !$('status').classList.contains('error') && !$('status').classList.contains('working')) {
       setStatus(`Routes ${state.people.length - pending}/${state.people.length}`, 'working', true);
     } else if (!pending && $('status').dataset.routes) setStatus('');
   }
+
+  // Selecting a person brings their route(s) to the front and fades the rest.
+  function eachLine(layer, fn) {
+    if (layer instanceof L.LayerGroup) layer.eachLayer((l) => eachLine(l, fn)); else fn(layer);
+  }
+  function applySelection() {
+    const sel = state.selected;
+    if (sel != null && !state.people.some((p) => p.id === sel)) state.selected = null;
+    for (const v of routeLines.values()) {
+      const on = state.selected == null || v.people.includes(state.selected);
+      eachLine(v.layer, (l) => {
+        if (l.options.baseOpacity == null) l.options.baseOpacity = l.options.opacity;
+        l.setStyle({ opacity: on ? l.options.baseOpacity : l.options.baseOpacity * 0.25 });
+      });
+    }
+    if (state.selected != null) {
+      for (const v of routeLines.values()) if (v.people.includes(state.selected)) eachLine(v.layer, (l) => l.bringToFront());
+    }
+    document.querySelectorAll('#routes .route').forEach((li) => li.classList.toggle('selected', Number(li.dataset.id) === state.selected));
+  }
+  function selectPerson(id) {
+    state.selected = id;
+    applySelection();
+  }
+  map.on('click', () => { if (state.selected != null) selectPerson(null); });
 
   $('routes').addEventListener('click', (e) => {
     const li = e.target.closest('.route');
     if (!li || !state.best) return;
     const p = state.people.find((x) => x.id === Number(li.dataset.id));
     if (!p) return;
+    selectPerson(p.id);
     const pts = [];
     for (const l of legs().filter((x) => x.people.includes(p.id))) {
       const r = state.routes.get(legKey(l));
@@ -870,7 +917,7 @@
   $('clear-btn').addEventListener('click', () => {
     if (!state.people.length || !confirm('Clear all?')) return;
     state.people = []; state.times.clear(); state.dists.clear(); state.candidates.clear();
-    state.coarseSpacing = null; state.fineGroups = []; state.pp.clear(); state.pickups.clear();
+    state.coarseSpacing = null; state.fineGroups = []; state.pp.clear(); state.pickups.clear(); state.venuePickups.clear();
     peopleChanged(false);
   });
 
