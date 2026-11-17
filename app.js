@@ -28,6 +28,7 @@
     cars: [],
     pickups: new Map(), // driverId -> {key, originId, lat, lng}
     journeys: null,
+    selected: null,
     syncGen: 0,
   };
   let nextId = 1;
@@ -121,6 +122,7 @@
       let m = markers.get(p.id);
       if (!m) {
         m = L.marker([p.lat, p.lng], { draggable: true, icon: personIcon(p), autoPan: true }).addTo(layers.people);
+        m.on('click', () => selectPerson(state.selected === p.id ? null : p.id));
         m.on('dragend', () => {
           const ll = m.getLatLng();
           movePerson(p.id, ll.lat, ll.lng);
@@ -579,9 +581,11 @@
         layer = L.polyline(leg.pts, { color: leg.color, weight: 2.5, opacity: 0.8, dashArray: '2 8' });
       }
       layer.addTo(layers.routes);
-      routeLines.set(leg.id, { sig, layer });
+      layer.on('click', (ev) => { L.DomEvent.stopPropagation(ev); selectPerson(leg.people.includes(state.selected) ? null : leg.people[0]); });
+      routeLines.set(leg.id, { sig, layer, people: leg.people });
     }
     for (const [id, v] of routeLines) if (!live.has(id)) { layers.routes.removeLayer(v.layer); routeLines.delete(id); }
+    applySelection();
     // Meet points.
     layers.pickups.clearLayers();
     for (const [did, pk] of state.pickups) {
@@ -691,16 +695,43 @@
         <span class="bar"><span style="width:${max ? Math.round((x.time / max) * 100) : 0}%;background:${x.p.color}"></span></span>
       </li>`;
     }).join('');
+    applySelection();
     if (pending && !$('status').classList.contains('error') && !$('status').classList.contains('working')) {
       setStatus(`Routes ${state.people.length - pending}/${state.people.length}`, 'working', true);
     } else if (!pending && $('status').dataset.routes) setStatus('');
   }
+
+  // Selecting a person brings their route(s) to the front and fades the rest.
+  function eachLine(layer, fn) {
+    if (layer instanceof L.LayerGroup) layer.eachLayer((l) => eachLine(l, fn)); else fn(layer);
+  }
+  function applySelection() {
+    const sel = state.selected;
+    if (sel != null && !state.people.some((p) => p.id === sel)) state.selected = null;
+    for (const v of routeLines.values()) {
+      const on = state.selected == null || v.people.includes(state.selected);
+      eachLine(v.layer, (l) => {
+        if (l.options.baseOpacity == null) l.options.baseOpacity = l.options.opacity;
+        l.setStyle({ opacity: on ? l.options.baseOpacity : l.options.baseOpacity * 0.25 });
+      });
+    }
+    if (state.selected != null) {
+      for (const v of routeLines.values()) if (v.people.includes(state.selected)) eachLine(v.layer, (l) => l.bringToFront());
+    }
+    document.querySelectorAll('#routes .route').forEach((li) => li.classList.toggle('selected', Number(li.dataset.id) === state.selected));
+  }
+  function selectPerson(id) {
+    state.selected = id;
+    applySelection();
+  }
+  map.on('click', () => { if (state.selected != null) selectPerson(null); });
 
   $('routes').addEventListener('click', (e) => {
     const li = e.target.closest('.route');
     if (!li || !state.best) return;
     const p = state.people.find((x) => x.id === Number(li.dataset.id));
     if (!p) return;
+    selectPerson(p.id);
     const pts = [];
     for (const l of legs().filter((x) => x.people.includes(p.id))) {
       const r = state.routes.get(legKey(l));
