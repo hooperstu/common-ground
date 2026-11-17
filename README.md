@@ -26,6 +26,17 @@ It is a single static page with no build step and no running costs, hosted on Gi
 6. **Routes.** Real road routes to the meeting point are fetched in the background, cached, and drawn
    in each person's colour. Until a route arrives a dotted line is shown.
 
+## Lift sharing
+
+Each person can ride with someone else instead of driving. The driver chooses how they share:
+
+- **Home pickup:** the driver collects passengers from their homes (nearest first), then drives on.
+- **Meet point:** everyone in the car drives to a meet point the app picks (short for all of them and on the
+  way to the likely venue), then they continue together.
+
+Shared journeys count in full for everyone in the car, so the fairest venue accounts for detours and
+pickups, and still updates live as the sliders move.
+
 The list is saved in your browser, and **Share link** copies a URL containing the whole list.
 
 ## Run locally
